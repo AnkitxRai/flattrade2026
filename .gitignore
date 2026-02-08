@@ -1,0 +1,11 @@
+# Ignore Python cache folders
+__pycache__/
+.DS_Store
+*.pyc
+
+# Ignore token file
+token.json
+
+# Optional: ignore virtual environment folders
+venv/
+.env/
