@@ -571,7 +571,7 @@ class NorenWebApi:
 
 
     def place_order(self, buy_or_sell, product_type,
-                    exchange, tradingsymbol, quantity, discloseqty,
+                    exchange, tradingsymbol, quantity,
                     price_type, price=0.0, trigger_price=None,
                     retention='DAY', amo=None, remarks=None, bookloss_price = 0.0, bookprofit_price = 0.0, trail_price = 0.0):
         config = NorenWebApi.__service_configweb
@@ -588,7 +588,7 @@ class NorenWebApi:
         values["exch"]      = exchange
         values["tsym"]      = urllib.parse.quote_plus(tradingsymbol)
         values["qty"]       = str(quantity)
-        values["dscqty"]    = str(discloseqty)        
+        # values["dscqty"]    = str(discloseqty)        
         values["prctyp"]    = price_type
         values["prc"]       = str(price)
         values["trgprc"]    = str(trigger_price)
