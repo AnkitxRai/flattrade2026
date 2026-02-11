@@ -34,8 +34,6 @@ PREV_ADX = 0
 LAT_ADX = 0
 
 
-api = NorenWebApi()
-api.login(userid=userid, password=password, totp_secret=totp_secret,app_key=app_key)
 
 
 def refresh_vwap_file_config():
@@ -380,7 +378,7 @@ def before_execution():
     return True  # ready to trade
 
 def get_atm_spot(strike_step: int = 50):
-    spot = api.get_quote("NSE", "26000")
+    spot = api.get_quotes("NSE", "26000")
     if spot.get("stat") != "Ok":
         raise Exception("Failed to fetch NIFTY spot:", spot)
 
@@ -399,7 +397,7 @@ def get_atm_option(expiry, isCallOrPut: str = "C"):
     return option_symbol
 
 def place_atm_order(expiry, callOrPut: str = "C", qty=65, offset=2):
-    option_strike = self.get_atm_option(expiry, callOrPut)  # should return e.g., "NIFTY28OCT25C55200"
+    option_strike = get_atm_option(expiry, callOrPut)  # should return e.g., "NIFTY28OCT25C55200"
 
     if not option_strike:
         print("Failed to get ATM option symbol")
@@ -409,18 +407,18 @@ def place_atm_order(expiry, callOrPut: str = "C", qty=65, offset=2):
         buy_or_sell="B",
         product_type="I",
         exchange="NFO",
-        tradingsymbol=tsym,
-        quantity=netqty,
+        tradingsymbol=option_strike,
+        quantity=qty,
         price_type="MKT",
         price=0.0
     )
 
-    if placing_atm_order and placing_atm_order.get("stat") == "Ok":
-        print(f"✅ [ATM Order Pl    aced] {option_strike}, Order No: {placing_atm_order.get('norenordno', 'N/A')}")
+    if resp and resp.get("stat") == "Ok":
+        print(f"✅ [ATM Order Placed] {option_strike}, Order No: {resp.get('norenordno', 'N/A')}")
     else:
-        print(f"❌ [ATM Order Failed] {option_strike}, Error: {placing_atm_order.get('emsg', 'Unknown error')}")
+        print(f"❌ [ATM Order Failed] {option_strike}, Error: {resp.get('emsg', 'Unknown error')}")
 
-    return placing_atm_order
+    return resp
 
 def execute_call_trade():
     global ACTIVE_POSITION, FIRST_TRADE, QTY
@@ -503,6 +501,13 @@ if __name__ == "__main__":
     # if not ok:
     #     print("Token unavailable. Exiting.")
     #     exit(1)
+
+    api = NorenWebApi()
+    try:
+        login = api.login(userid=userid, password=password, totp_secret=totp_secret,app_key=app_key)
+    except Exception as e:
+        print("Login Failed:", str(e))
+        send_telegram_message(f"❌ Login Error: {str(e)}")
 
     refresh_vwap_file_config()
 
