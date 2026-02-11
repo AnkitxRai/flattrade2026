@@ -32,6 +32,7 @@ FIRST_TRADE = True
 ACTIVE_POSITION = None
 PREV_ADX = 0
 LAT_ADX = 0
+TELEGRAM = False
 
 
 
@@ -230,7 +231,8 @@ def strike_vwap():
         print("❌ Error searching data:", e)
 
 def send_telegram_message(msg, imp=True):
-    return # todo
+    if not TELEGRAM:
+        return
     BOT_TOKEN = "8331147432:AAGSG4mI8d87sWEBsY0qtarAtwWbpa4viq0" # zapy
     CHANNEL_ID = "-1003494200670"   # your flatxx channel ID
     CHANNEL_ID_IMP = "-1003448158591"   # your flatxx imp channel ID
@@ -253,16 +255,6 @@ def format_output(ts, ltp, vwap, coi_pcr, change_pts, LAT_ADX):
 
     send_telegram_message(f"🕒{time_str} | {change_pts} {change_emoji} | Adx:{LAT_ADX} | {vwap}{vwap_flag} | {coi_pcr_k}K{coi_flag}", False)
     print(f"🕒 {time_str} | {ltp} | {change_pts} {change_emoji} | Adx : {LAT_ADX} | {vwap}{vwap_flag} | {coi_pcr_k}K{coi_flag}")
-
-    send_to_sheet(
-        time_str=time_str,
-        ltp=ltp,
-        change_pts=change_pts,
-        change_emoji=change_emoji,
-        vwap_flag=vwap_flag,
-        coi_flag=coi_flag,
-        coi_pcr_k=coi_pcr_k
-    )
 
 def calculate_realized_pnl():
     position_book = api.get_positions() or []
