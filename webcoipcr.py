@@ -60,13 +60,14 @@ def refresh_vwap_file_config():
     return SENSIBUL_FUTURE_EXPIRY, OPTION_EXPIRY, QTY, TRADING_ACTIVE
 
 def fetch_vwap():
-    # if not SENSIBUL_FUTURE_EXPIRY:
-    #     print("❗ SENSIBUL_FUTURE_EXPIRY not configured.")
-    #     return None, None, None
+    if not SENSIBUL_FUTURE_EXPIRY:
+        print("❗ SENSIBUL_FUTURE_EXPIRY not configured.")
+        return None, None, None
     
-    today = datetime.now().strftime("%Y-%m-%d")
-    now = datetime.now()
-    SENSIBUL_FUTURE_EXPIRY = f"NIFTY{now.strftime('%y')}{now.strftime('%b').upper()}FUT"
+    # after 25 of month new month start
+    # today = datetime.now().strftime("%Y-%m-%d")
+    # now = datetime.now()
+    # SENSIBUL_FUTURE_EXPIRY = f"NIFTY{now.strftime('%y')}{now.strftime('%b').upper()}FUT"
 
     url = f"https://oxide.sensibull.com/v1/compute/candles/{SENSIBUL_FUTURE_EXPIRY}"
     payload = {
