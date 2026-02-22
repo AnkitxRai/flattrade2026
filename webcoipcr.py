@@ -18,7 +18,7 @@ app_key = "9e5e9c7220b524ea19a7e6029f5140c423daea49318b23b3b36416549673bac2" # l
 # userid = "FZ31096"
 # password = "##"
 # totp_secret = "V3B3T3AZ3U6236HO35BQRL6S4KP725O5"
-# app_key = "" # login on web and copy from network tab : quickauth api
+# app_key = "271b7fc4385a31a3855553a29e31af8a1ee91232f3f980aa810197afe58c8ff9" # login on web and copy from network tab : quickauth api
 
 
 ############################## config ###########################
@@ -65,10 +65,10 @@ def fetch_vwap():
         return None, None, None
     
     # after 25 of month new month start
-    # today = datetime.now().strftime("%Y-%m-%d")
     # now = datetime.now()
     # SENSIBUL_FUTURE_EXPIRY = f"NIFTY{now.strftime('%y')}{now.strftime('%b').upper()}FUT"
 
+    today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://oxide.sensibull.com/v1/compute/candles/{SENSIBUL_FUTURE_EXPIRY}"
     payload = {
         "from_date": today,
@@ -414,14 +414,7 @@ def place_atm_order(expiry, callOrPut: str = "C", qty=65, offset=2):
     return resp
 
 def execute_call_trade():
-    global ACTIVE_POSITION, FIRST_TRADE, QTY
-
-    # 🟡 Skip the first CALL trade only once
-    if FIRST_TRADE and ACTIVE_POSITION != 'CALL':
-        ACTIVE_POSITION = 'CALL'
-        FIRST_TRADE = False
-        print("⏸ Skipping first CALL trade (initial trigger).")
-        return
+    global ACTIVE_POSITION, QTY
 
     if not before_execution():
         return
@@ -431,14 +424,7 @@ def execute_call_trade():
     print("🟢 Entered Call position")
 
 def execute_put_trade():
-    global ACTIVE_POSITION, FIRST_TRADE, QTY
-
-    # 🟡 Skip the first PUT trade only once
-    if FIRST_TRADE and ACTIVE_POSITION != 'PUT':
-        ACTIVE_POSITION = 'PUT'
-        FIRST_TRADE = False
-        print("⏸ Skipping first PUT trade (initial trigger).")
-        return
+    global ACTIVE_POSITION, QTY
 
     if not before_execution():
         return
@@ -456,7 +442,7 @@ def close_trade():
     print("❌ Closing all position")
 
 def monitor_loop():
-    global ACTIVE_POSITION, PREV_ADX, LAT_ADX
+    global ACTIVE_POSITION, PREV_ADX, LAT_ADX, FIRST_TRADE
 
     ts, ltp, vwap = fetch_vwap()
     index, change, round_value, coi_pcr, cltp, cvwap, pltp, pvwap = strike_vwap()
@@ -469,6 +455,25 @@ def monitor_loop():
         return  # Skip without sleeping here; sleep is in main loop
 
     format_output(ts, ltp, vwap, coi_pcr, change, LAT_ADX)
+
+    # First trade skip logic
+    if FIRST_TRADE and ACTIVE_POSITION is None:
+        would_trigger_call = ltp > vwap and cltp > cvwap and coi_pcr > 0
+        would_trigger_put  = ltp < vwap and pltp > pvwap and coi_pcr < 0
+
+        if would_trigger_call:
+            ACTIVE_POSITION = 'CALL'
+            FIRST_TRADE = False
+            print("⏸ Skipping first CALL trade (initial trigger).")
+            return
+        elif would_trigger_put:
+            ACTIVE_POSITION = 'PUT'
+            FIRST_TRADE = False
+            print("⏸ Skipping first PUT trade (initial trigger).")
+            return
+        else:
+            FIRST_TRADE = False
+            print("ℹ️ No condition at startup. First trade skip disabled.")
     
     # Long (Call) Logic
     if ACTIVE_POSITION == 'CALL':
@@ -517,12 +522,16 @@ if __name__ == "__main__":
                 time.sleep(60)
                 continue
 
+            loop_start = time.time()
+
             try:
                 monitor_loop()
             except Exception as e:
                 print(f"❌ Monitor error: {e}")
 
-            time.sleep(60)
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, 60 - elapsed)  # subtract time already spent
+            time.sleep(sleep_time)
 
         except KeyboardInterrupt:
             print("🛑 Monitor stopped by user.")
