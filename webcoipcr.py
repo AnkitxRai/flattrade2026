@@ -109,6 +109,9 @@ def fetch_vwap():
         print(f"❌ VWAP fetch error: {e}")
         return None, None, None
 
+def get_atm_strike(ltp):
+    return round(ltp / 50) * 50
+
 def get_adx():
     if not SENSIBUL_FUTURE_EXPIRY:
         print("❗ SENSIBUL_FUTURE_EXPIRY not configured.")
@@ -389,8 +392,9 @@ def get_atm_option(expiry, isCallOrPut: str = "C"):
     option_symbol = f"NIFTY{expiry}{option_type}{atm}"
     return option_symbol
 
-def place_atm_order(expiry, callOrPut: str = "C", qty=65, offset=2):
-    option_strike = get_atm_option(expiry, callOrPut)  # should return e.g., "NIFTY28OCT25C55200"
+def place_atm_order(expiry, callOrPut: str = "C", qty=65, atm=None):
+    # option_strike = get_atm_option(expiry, callOrPut)  # should return e.g., "NIFTY28OCT25C55200"
+    option_strike = f"NIFTY{expiry}{callOrPut.upper()}{atm}"
 
     if not option_strike:
         print("Failed to get ATM option symbol")
@@ -413,22 +417,22 @@ def place_atm_order(expiry, callOrPut: str = "C", qty=65, offset=2):
 
     return resp
 
-def execute_call_trade():
+def execute_call_trade(ATM):
     global ACTIVE_POSITION, QTY
 
     if not before_execution():
         return
-    place_atm_order(OPTION_EXPIRY, "C", QTY)
+    place_atm_order(OPTION_EXPIRY, "C", QTY, ATM)
     ACTIVE_POSITION = 'CALL'
     send_telegram_message("🟢 Entered Call position")
     print("🟢 Entered Call position")
 
-def execute_put_trade():
+def execute_put_trade(ATM):
     global ACTIVE_POSITION, QTY
 
     if not before_execution():
         return
-    place_atm_order(OPTION_EXPIRY, "P", QTY)
+    place_atm_order(OPTION_EXPIRY, "P", QTY, ATM)
     ACTIVE_POSITION = 'PUT'
     send_telegram_message("🔴 Entered Put position")
     print("🔴 Entered Put position")
@@ -445,14 +449,19 @@ def monitor_loop():
     global ACTIVE_POSITION, PREV_ADX, LAT_ADX, FIRST_TRADE
 
     ts, ltp, vwap = fetch_vwap()
-    index, change, round_value, coi_pcr, cltp, cvwap, pltp, pvwap = strike_vwap()
+    if ts is None or ltp is None or vwap is None:
+        print(f"{datetime.now().strftime('%H:%M')} | VWAP fetch error, skipping…")
+        return
+    atm = get_atm_strike(ltp) 
+
+    result = strike_vwap()
+    if result is None:
+        print(f"{datetime.now().strftime('%H:%M')} | strike_vwap fetch error, skipping…")
+        return
+    index, change, round_value, coi_pcr, cltp, cvwap, pltp, pvwap = result  # ✅
 
     PREV_ADX = LAT_ADX
     LAT_ADX = get_adx()
-
-    if ts is None or ltp is None or vwap is None or coi_pcr is None or change is None:
-        print(f"{datetime.now().strftime('%H:%M')} | Data fetch error, skipping…")
-        return  # Skip without sleeping here; sleep is in main loop
 
     format_output(ts, ltp, vwap, coi_pcr, change, LAT_ADX)
 
@@ -477,21 +486,21 @@ def monitor_loop():
     
     # Long (Call) Logic
     if ACTIVE_POSITION == 'CALL':
-        if (cltp is None or cvwap is None) or ((cltp < cvwap) or (pltp is not None and pltp > pvwap) or (ltp < vwap)):
+        if (cltp is None or cvwap is None) or ((cltp < cvwap) or (pltp is not None and pltp > pvwap) or (ltp < vwap)) or (coi_pcr < 0):
             close_trade()
 
     elif ACTIVE_POSITION is None:
         if ltp > vwap and cltp > cvwap and coi_pcr > 0:
-            execute_call_trade()
+            execute_call_trade(atm)
 
     # Short (Put) Logic
     if ACTIVE_POSITION == 'PUT':
-        if (pltp is None or pvwap is None) or ((pltp < pvwap) or (cltp is not None and cltp > cvwap) or (ltp > vwap)):
+        if (pltp is None or pvwap is None) or ((pltp < pvwap) or (cltp is not None and cltp > cvwap) or (ltp > vwap)) or (coi_pcr > 0):
             close_trade()
 
     elif ACTIVE_POSITION is None:
         if ltp < vwap and pltp > pvwap and coi_pcr < 0:
-            execute_put_trade()
+            execute_put_trade(atm)
 
 if __name__ == "__main__":
     # generate_token()
