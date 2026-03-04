@@ -264,11 +264,11 @@ def update_coi_history(coi_pcr):
     global COI_HISTORY
     COI_HISTORY.append(coi_pcr)
     if len(COI_HISTORY) > 30:
-        COI_HISTORY.pop(0)
+        COI_HISTORY.pop(0)  # ← removes oldest, keeps rolling 30
 
 
 def get_coi_avg():
-    if not COI_HISTORY:
+    if len(COI_HISTORY) < 10:  # wait for at least 10 candles
         return None
     return sum(COI_HISTORY) / len(COI_HISTORY)
 
