@@ -30,6 +30,7 @@ QTY = None
 TRADING_ACTIVE = False  # Fetch from Json Keeper check refresh_vwap_file_config()
 FIRST_TRADE = True
 ACTIVE_POSITION = None
+ENTRY_STRIKE = None  # 🔒 locked strike at entry
 PREV_ADX = 0
 LAT_ADX = 0
 TELEGRAM = False
@@ -109,8 +110,8 @@ def fetch_vwap():
         print(f"❌ VWAP fetch error: {e}")
         return None, None, None
 
-def get_atm_strike(ltp):
-    return round(ltp / 50) * 50
+def get_atm_strike(index):
+    return round(index / 50) * 50  # ✅ uses spot index not futures ltp
 
 def get_adx():
     if not SENSIBUL_FUTURE_EXPIRY:
@@ -203,8 +204,13 @@ def get_day_change():
         print(f"❌ Change fetch error: {e}")
         return None
 
-def strike_vwap():
-    index, change, rounded = get_day_change()
+def strike_vwap(locked_strike=None):
+    result = get_day_change()
+    if result is None:
+        print("❌ get_day_change failed")
+        return None
+    index, change, rounded = result
+
     option_chain = fetch_nt_total()
 
     if not option_chain:
@@ -215,7 +221,12 @@ def strike_vwap():
         # coi pcr
         totals = option_chain["resultData"]["opTotals"]["total_calls_puts"]
         coi_pcr = totals["total_puts_change_oi"] - totals["total_calls_change_oi"]
-        round_value = rounded - 50 if coi_pcr > 0 else rounded + 50
+
+        # ✅ use locked strike if in position, else calculate fresh
+        if locked_strike is not None:
+            round_value = locked_strike
+        else:
+            round_value = rounded - 50 if coi_pcr > 0 else rounded + 50
 
         data_list = option_chain["resultData"]["opDatas"]
         match = next((item for item in data_list if item["strike_price"] == round_value), None)
@@ -417,48 +428,67 @@ def place_atm_order(expiry, callOrPut: str = "C", qty=65, atm=None):
 
     return resp
 
-def execute_call_trade(ATM):
-    global ACTIVE_POSITION, QTY
+def execute_call_trade(ATM, strike):
+    global ACTIVE_POSITION, QTY, ENTRY_STRIKE
 
     if not before_execution():
         return
     place_atm_order(OPTION_EXPIRY, "C", QTY, ATM)
     ACTIVE_POSITION = 'CALL'
+    ENTRY_STRIKE = strike  # 🔒 lock strike
     send_telegram_message("🟢 Entered Call position")
     print("🟢 Entered Call position")
 
-def execute_put_trade(ATM):
-    global ACTIVE_POSITION, QTY
+def execute_put_trade(ATM, strike):
+    global ACTIVE_POSITION, QTY, ENTRY_STRIKE
 
     if not before_execution():
         return
     place_atm_order(OPTION_EXPIRY, "P", QTY, ATM)
     ACTIVE_POSITION = 'PUT'
+    ENTRY_STRIKE = strike  # 🔒 lock strike
     send_telegram_message("🔴 Entered Put position")
     print("🔴 Entered Put position")
 
 def close_trade():
-    global ACTIVE_POSITION
+    global ACTIVE_POSITION, ENTRY_STRIKE
     cancel_all_pending_mis_orders()
     close_all_positions()
     ACTIVE_POSITION = None
+    ENTRY_STRIKE = None  # 🔓 unlock strike
     send_telegram_message("❌ Closing all position")
     print("❌ Closing all position")
 
+def auto_close_eod():
+    """Auto close all positions at end of day 3:12 PM"""
+    now = datetime.now()
+    if now.hour == 15 and now.minute >= 12:
+        if ACTIVE_POSITION is not None:
+            print(f"⏰ 3:12 PM — Auto closing position.")
+            close_trade()
+        return True  # signal to stop trading for the day
+    return False
+
 def monitor_loop():
     global ACTIVE_POSITION, PREV_ADX, LAT_ADX, FIRST_TRADE
+
+    # ✅ EOD check first
+    if auto_close_eod():
+        return # stop trading 03:12
 
     ts, ltp, vwap = fetch_vwap()
     if ts is None or ltp is None or vwap is None:
         print(f"{datetime.now().strftime('%H:%M')} | VWAP fetch error, skipping…")
         return
-    atm = get_atm_strike(ltp) 
 
-    result = strike_vwap()
+    # ✅ pass locked strike when in position
+    result = strike_vwap(locked_strike=ENTRY_STRIKE)
     if result is None:
         print(f"{datetime.now().strftime('%H:%M')} | strike_vwap fetch error, skipping…")
         return
     index, change, round_value, coi_pcr, cltp, cvwap, pltp, pvwap = result  # ✅
+
+    atm = get_atm_strike(index)  # ✅ use spot price for ATM
 
     PREV_ADX = LAT_ADX
     LAT_ADX = get_adx()
@@ -491,7 +521,7 @@ def monitor_loop():
 
     elif ACTIVE_POSITION is None:
         if ltp > vwap and cltp > cvwap and coi_pcr > 0:
-            execute_call_trade(atm)
+            execute_call_trade(atm, round_value)  # ✅ pass strike
 
     # Short (Put) Logic
     if ACTIVE_POSITION == 'PUT':
@@ -500,7 +530,7 @@ def monitor_loop():
 
     elif ACTIVE_POSITION is None:
         if ltp < vwap and pltp > pvwap and coi_pcr < 0:
-            execute_put_trade(atm)
+            execute_put_trade(atm, round_value)  # ✅ pass strike
 
 if __name__ == "__main__":
     # generate_token()
@@ -531,16 +561,15 @@ if __name__ == "__main__":
                 time.sleep(60)
                 continue
 
-            loop_start = time.time()
-
             try:
                 monitor_loop()
             except Exception as e:
                 print(f"❌ Monitor error: {e}")
 
-            elapsed = time.time() - loop_start
-            sleep_time = max(0, 60 - elapsed)  # subtract time already spent
-            time.sleep(sleep_time)
+            # ✅ clock aligned sleep — always runs at :05 of every minute
+            now = datetime.now()
+            seconds_to_next_minute = 60 - now.second
+            time.sleep(seconds_to_next_minute + 5)
 
         except KeyboardInterrupt:
             print("🛑 Monitor stopped by user.")
