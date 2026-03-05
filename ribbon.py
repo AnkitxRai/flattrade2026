@@ -54,15 +54,43 @@ def refresh_vwap_file_config():
     return SENSIBUL_FUTURE_EXPIRY, OPTION_EXPIRY, QTY, TRADING_ACTIVE
 
 
+# ─────────────────────────────────────────────
+# T3 RIBBON
+# returns 1 = green, -1 = red, 0 = grey
+# ─────────────────────────────────────────────
+def _ema(src, length):
+    k, out = 2.0 / (length + 1), []
+    e = src[0]
+    for i, v in enumerate(src):
+        e = v if i == 0 else v * k + e * (1 - k)
+        out.append(e)
+    return out
+
+
+def _t3(src, length, smooth=0.30):
+    e1 = _ema(src, length)
+    e2 = _ema(e1,  length)
+    e3 = _ema(e2,  length)
+    e4 = _ema(e3,  length)
+    e5 = _ema(e4,  length)
+    e6 = _ema(e5,  length)
+    f  = smooth
+    c1 = -(f**3)
+    c2 = 3*f**2 + 3*f**3
+    c3 = -6*f**2 - 3*f - 3*f**3
+    c4 = 1 + 3*f + f**3 + 3*f**2
+    return [c1*e6[j] + c2*e5[j] + c3*e4[j] + c4*e3[j] for j in range(len(src))]
+
+
 def fetch_candles():
-    """Fetch NIFTY spot candles — returns ts, ltp, supertrend"""
+    """Fetch NIFTY spot candles — returns ts, ltp, ribbon"""
     today = datetime.now().strftime("%Y-%m-%d")
     url = "https://oxide.sensibull.com/v1/compute/candles/NIFTY"
     payload = {
-        "from_date": today,
-        "to_date": today,
-        "interval": "1M",
-        "skip_last_ts": True
+        "from_date":    today,
+        "to_date":      today,
+        "interval":     "1M",
+        "skip_last_ts": True,
     }
 
     try:
@@ -74,55 +102,27 @@ def fetch_candles():
         ts  = latest["ts"]
         ltp = latest["close"]
 
-        period     = 10
-        multiplier = 3
-
-        if len(candles) < period + 1:
+        if len(candles) < 20:
             return ts, ltp, None
 
-        high  = [c["high"] for c in candles]
-        low   = [c["low"] for c in candles]
-        close = [c["close"] for c in candles]
+        hlc3 = [(c["high"] + c["low"] + c["close"]) / 3.0 for c in candles]
 
-        def rma(x, p):
-            s = sum(x[:p]) / p
-            out = [s]
-            for v in x[p:]:
-                s = (s * (p-1) + v) / p
-                out.append(s)
-            return out
+        w1 = _t3(hlc3, 9)
+        w2 = _t3(hlc3, 10)
+        w3 = _t3(hlc3, 11)
+        w4 = _t3(hlc3, 12)
 
-        tr = [max(high[i] - low[i],
-                  abs(high[i] - close[i-1]),
-                  abs(low[i] - close[i-1])) for i in range(1, len(candles))]
+        i      = len(candles) - 1
+        fast   = (w1[i] + w2[i]) / 2.0
+        slow   = (w3[i] + w4[i]) / 2.0
+        center = (w1[i] + w2[i] + w3[i] + w4[i]) / 4.0
+        prev_c = (w1[i-1] + w2[i-1] + w3[i-1] + w4[i-1]) / 4.0
 
-        atr = rma(tr, period)
+        if   fast > slow and center > prev_c: ribbon = 1
+        elif fast < slow and center < prev_c: ribbon = -1
+        else:                                 ribbon = 0
 
-        trend      = 1
-        prev_upper = prev_lower = None
-        atr_start  = period
-
-        for i in range(len(atr)):
-            idx   = atr_start + i
-            hl2   = (high[idx] + low[idx]) / 2
-            upper = hl2 + multiplier * atr[i]
-            lower = hl2 - multiplier * atr[i]
-
-            if prev_upper is not None:
-                upper = min(upper, prev_upper) if close[idx-1] < prev_upper else upper
-                lower = max(lower, prev_lower) if close[idx-1] > prev_lower else lower
-
-            if prev_upper is None:
-                trend = 1
-            elif close[idx] > prev_upper:
-                trend = 1
-            elif close[idx] < prev_lower:
-                trend = -1
-
-            prev_upper = upper
-            prev_lower = lower
-
-        return ts, ltp, trend  # 1 = green, -1 = red
+        return ts, ltp, ribbon
 
     except Exception as e:
         print(f"❌ fetch_candles error: {e}")
@@ -141,18 +141,18 @@ def get_adx():
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://oxide.sensibull.com/v1/compute/candles/{SENSIBUL_FUTURE_EXPIRY}"
     payload = {
-        "from_date": today,
-        "to_date": today,
-        "interval": "1M",
-        "skip_last_ts": True
+        "from_date":    today,
+        "to_date":      today,
+        "interval":     "1M",
+        "skip_last_ts": True,
     }
 
     try:
         data = requests.post(url, json=payload).json()
         c = data["payload"]["candles"]
 
-        high  = [x["high"] for x in c]
-        low   = [x["low"] for x in c]
+        high  = [x["high"]  for x in c]
+        low   = [x["low"]   for x in c]
         close = [x["close"] for x in c]
 
         tr, plus_dm, minus_dm = [], [], []
@@ -175,9 +175,9 @@ def get_adx():
 
         p = 14
         tr_r = rma(tr, p)
-        pdi = [(a/b)*100 for a, b in zip(rma(plus_dm, p), tr_r)]
-        mdi = [(a/b)*100 for a, b in zip(rma(minus_dm, p), tr_r)]
-        dx  = [abs(a-b)/(a+b)*100 if (a+b) != 0 else 0 for a, b in zip(pdi, mdi)]
+        pdi  = [(a/b)*100 for a, b in zip(rma(plus_dm, p), tr_r)]
+        mdi  = [(a/b)*100 for a, b in zip(rma(minus_dm, p), tr_r)]
+        dx   = [abs(a-b)/(a+b)*100 if (a+b) != 0 else 0 for a, b in zip(pdi, mdi)]
 
         return round(rma(dx, p)[-1], 1)
 
@@ -190,7 +190,7 @@ def fetch_nt_total():
     url = "https://webapi.niftytrader.in/webapi/option/option-chain-data?symbol=nifty&exchange=nse&expiryDate=&atmBelow=2&atmAbove=2"
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "accept": "application/json"
+        "accept": "application/json",
     }
     try:
         res = requests.get(url, headers=headers)
@@ -204,10 +204,10 @@ def get_day_change():
     url = "https://webapi.niftytrader.in/webapi/symbol/today-spot-data?symbol=nifty&created_at="
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "accept": "application/json"
+        "accept": "application/json",
     }
     try:
-        res = requests.get(url, headers=headers)
+        res  = requests.get(url, headers=headers)
         data = res.json()
         index   = data["resultData"]["last_trade_price"]
         change  = data["resultData"]["change_value"]
@@ -273,15 +273,18 @@ def send_telegram_message(msg, imp=True):
         print("❌ send_telegram_message error:", e)
 
 
-def format_output(ts, ltp, coi_pcr, change_pts, adx, st):
+def format_output(ts, ltp, coi_pcr, change_pts, adx, ribbon):
     time_str     = datetime.fromisoformat(ts).strftime("%H:%M")
     coi_flag     = "🟢" if coi_pcr > 0 else "🔴"
     coi_pcr_k    = round(coi_pcr / 1000, 1)
     change_emoji = "🟢" if change_pts >= 0 else "🔴"
-    st_flag      = "🟢ST" if st == 1 else "🔴ST"
 
-    print(f"🕒 {time_str} | {ltp} | {change_pts} {change_emoji} | ADX:{adx} | {st_flag} | {coi_pcr_k}K{coi_flag}")
-    send_telegram_message(f"🕒{time_str} | {change_pts} {change_emoji} | ADX:{adx} | {st_flag} | {coi_pcr_k}K{coi_flag}", False)
+    if ribbon == 1:    rib_flag = "🟢RIB"
+    elif ribbon == -1: rib_flag = "🔴RIB"
+    else:              rib_flag = "🟡RIB"
+
+    print(f"🕒 {time_str} | {ltp} | {change_pts} {change_emoji} | ADX:{adx} | {rib_flag} | {coi_pcr_k}K{coi_flag}")
+    send_telegram_message(f"🕒{time_str} | {change_pts} {change_emoji} | ADX:{adx} | {rib_flag} | {coi_pcr_k}K{coi_flag}", False)
 
 
 def calculate_realized_pnl():
@@ -436,7 +439,7 @@ def monitor_loop():
     if auto_close_eod():
         return
 
-    ts, ltp, st = fetch_candles()
+    ts, ltp, ribbon = fetch_candles()
     if ts is None or ltp is None:
         print(f"{datetime.now().strftime('%H:%M')} | Candle fetch error, skipping…")
         return
@@ -452,10 +455,18 @@ def monitor_loop():
     PREV_ADX = LAT_ADX
     LAT_ADX  = get_adx()
 
-    format_output(ts, ltp, coi_pcr, change, LAT_ADX, st)
+    format_output(ts, ltp, coi_pcr, change, LAT_ADX, ribbon)
 
-    if st is None or LAT_ADX is None:
+    # FIX 1: guard against None before any comparison
+    if ribbon is None or LAT_ADX is None:
         print(f"{datetime.now().strftime('%H:%M')} | Indicators not ready, skipping…")
+        return
+
+    # FIX 2: grey closes open position instead of holding blindly
+    if ribbon == 0:
+        if ACTIVE_POSITION is not None:
+            close_trade()
+        print(f"{datetime.now().strftime('%H:%M')} | Ribbon grey — no trade.")
         return
 
     # First trade skip
@@ -465,11 +476,11 @@ def monitor_loop():
         return
 
     # ── Entry conditions ─────────────────────────────
-    # Call: ST green + cltp > cvwap + ADX rising
-    call_entry = st == 1  and cltp > cvwap and LAT_ADX > PREV_ADX
+    # Call: ribbon green + cltp > cvwap + ADX rising
+    call_entry = ribbon == 1  and cltp > cvwap and LAT_ADX > PREV_ADX
 
-    # Put: ST red + pltp > pvwap + ADX rising
-    put_entry  = st == -1 and pltp > pvwap and LAT_ADX > PREV_ADX
+    # Put: ribbon red + pltp > pvwap + ADX rising
+    put_entry  = ribbon == -1 and pltp > pvwap and LAT_ADX > PREV_ADX
 
     # ── CALL logic ───────────────────────────────────
     if ACTIVE_POSITION == 'CALL':
