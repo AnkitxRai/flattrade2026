@@ -451,7 +451,7 @@ def monitor_loop():
         if not call_entry:
             close_trade()
     elif ACTIVE_POSITION is None:
-        if ma_data["cross_up"] and cltp > cvwap:
+        if call_entry:
             execute_call_trade(atm)
 
     # ── PUT logic ──
@@ -459,7 +459,7 @@ def monitor_loop():
         if not put_entry:
             close_trade()
     elif ACTIVE_POSITION is None:
-        if ma_data["cross_down"] and pltp > pvwap:
+        if put_entry:
             execute_put_trade(atm)
 
 
