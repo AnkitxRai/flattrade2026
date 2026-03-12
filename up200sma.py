@@ -32,12 +32,17 @@ PCR_DATA               = {}
 
 def fetch_nt_total():
     global PCR_DATA
-    url     = "https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime=15:30:00&isloader=false&atmBelow=2&atmAbove=2"
+    created_time = (datetime.now() - timedelta(minutes=1)).strftime("%H:%M:%S")
+    url     = f"https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime={created_time}&isloader=false&atmBelow=2&atmAbove=2"
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
+    print(created_time)
     try:
-        resp    = requests.get(url, headers=headers, timeout=10).json()
-        PCR_DATA = resp.get("resultData", {}).get("pcr_data", {})
-        return resp
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if not data or not isinstance(data, dict):
+            print(f"❌ NT bad response"); return None
+        PCR_DATA = data.get("resultData", {}).get("pcr_data", {})
+        return data
     except Exception as e:
         print(f"❌ NT fetch error: {e}"); return None
 
