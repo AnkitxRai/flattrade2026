@@ -26,29 +26,45 @@ TRADING_ACTIVE         = False
 FIRST_TRADE            = True
 ACTIVE_POSITION        = None
 ENTRY_STRIKE           = None
-TELEGRAM               = False
-PCR_DATA               = {}
+TELEGRAM               = True
 
 
+# ─────────────────────────────────────────────
+# Fetch Strike OI and VWAP Data
+# ─────────────────────────────────────────────
 def fetch_nt_total():
-    global PCR_DATA
-    created_time = (datetime.now() - timedelta(minutes=1)).strftime("%H:%M:%S")
-    url     = f"https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime={created_time}&isloader=false&atmBelow=2&atmAbove=2"
+    url     = "https://webapi.niftytrader.in/webapi/option/option-chain-data?symbol=nifty&exchange=nse&expiryDate=&atmBelow=2&atmAbove=2"
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
-    print(created_time)
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=20)
         data = resp.json()
         if not data or not isinstance(data, dict):
             print(f"❌ NT bad response"); return None
-        PCR_DATA = data.get("resultData", {}).get("pcr_data", {})
         return data
     except Exception as e:
         print(f"❌ NT fetch error: {e}"); return None
 
+# ─────────────────────────────────────────────
+# Fetch option expiry list
+# ─────────────────────────────────────────────
+def fetch_nt_expiry():
+    created_time = (datetime.now() - timedelta(minutes=2)).strftime("%H:%M:%S")
+    url     = f"https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime={created_time}&isloader=false&atmBelow=2&atmAbove=2"
+    headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if not data or not isinstance(data, dict):
+            print(f"❌ NT expiry bad response"); return None
+        return data  # ← missing
+    except Exception as e:
+        print(f"❌ NT expiry fetch error: {e}"); return None
 
+# ─────────────────────────────────────────────
+# Set current expiry and next expiry based on date
+# ─────────────────────────────────────────────
 def get_auto_expiry():
-    data = fetch_nt_total()
+    data = fetch_nt_expiry()
     if not data:
         return None
     try:
@@ -96,13 +112,9 @@ def refresh_config():
     except Exception as e:
         print(f"❌ Config fetch failed: {e}"); return
     SENSIBUL_FUTURE_EXPIRY = data.get("SENSIBUL_FUTURE_EXPIRY")
-    OPTION_EXPIRY          = data.get("OPTION_EXPIRY")
+    # OPTION_EXPIRY          = data.get("OPTION_EXPIRY") # Setting auto expiry in main
     QTY                    = data.get("QTY")
     TRADING_ACTIVE         = data.get("TRADING_ACTIVE", False)
-    # auto shift expiry if <= 2 trading days remaining
-    auto_expiry = get_auto_expiry()
-    if auto_expiry:
-        OPTION_EXPIRY = auto_expiry
 
 
 # ─────────────────────────────────────────────
@@ -167,7 +179,6 @@ def get_atm_strike(index):
 
 def get_adx():
     today    = datetime.now().strftime("%Y-%m-%d")
-    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     url      = "https://oxide.sensibull.com/v1/compute/candles/NIFTY"
     payload  = {
         "from_date":    today,
@@ -266,14 +277,12 @@ def send_telegram_message(msg, imp=True):
         print("❌ Telegram error:", e)
 
 
-def format_output(ts, ltp, coi_pcr, change_pts, ma_data):
+def format_output(ts, ltp, coi_pcr, change_pts, ma_data, adx):
     time_str     = datetime.fromisoformat(ts).strftime("%H:%M")
+    adx_str = f"ADX:{adx}" if adx else "ADX:--"
     coi_flag     = "🟢" if coi_pcr > 0 else "🔴"
     coi_pcr_k    = round(coi_pcr / 1000, 1)
     change_emoji = "🟢" if change_pts >= 0 else "🔴"
-
-    change_oi_pcr = PCR_DATA.get("change_oi_pcr", 0)
-    pcr_str       = f"PCR:{change_oi_pcr}"
 
     if ma_data:
         cross_str = "🟢" if ma_data["bull_side"] else "🔴"
@@ -282,8 +291,8 @@ def format_output(ts, ltp, coi_pcr, change_pts, ma_data):
         cross_str = "⏳"
         ma_str    = "SMA warming up"
 
-    print(f"🕒 {time_str} | {ltp} | {change_pts} {change_emoji} | MA:{cross_str} | {pcr_str} | {coi_pcr_k}K{coi_flag} | {ma_str}")
-    send_telegram_message(f"🕒{time_str} | {change_pts} {change_emoji} | MA:{cross_str} | {pcr_str} | {coi_pcr_k}K{coi_flag}", False)
+    print(f"🕒 {time_str} | {ltp} | {change_pts} {change_emoji} | MA:{cross_str} | {adx_str} | {coi_pcr_k}K{coi_flag} | {ma_str}")
+    send_telegram_message(f"🕒{time_str} | {change_pts} {change_emoji} | MA:{cross_str} | {adx_str} | {coi_pcr_k}K{coi_flag}", False)
 
 def calculate_realized_pnl():
     position_book = api.get_positions() or []
@@ -419,8 +428,9 @@ def monitor_loop():
     index, change, round_value, coi_pcr, cltp, cvwap, pltp, pvwap = result
 
     atm = get_atm_strike(index)
+    adx = get_adx()
 
-    format_output(ts, ltp, coi_pcr, change, ma_data)
+    format_output(ts, ltp, coi_pcr, change, ma_data, adx)
 
     if ma_data is None:
         print(f"{datetime.now().strftime('%H:%M')} | SMA200 warming up, skipping…")
@@ -432,7 +442,7 @@ def monitor_loop():
         return
 
     # ── Entry / Exit conditions ──
-    # ADX removed — MA cross + option VWAP only
+    # MA cross + option VWAP only
     call_entry = ma_data["bull_side"] and cltp > cvwap
     put_entry  = ma_data["bear_side"] and pltp > pvwap
 
@@ -460,6 +470,10 @@ if __name__ == "__main__":
     except Exception as e:
         print("Login Failed:", str(e))
         send_telegram_message(f"❌ Login Error: {str(e)}")
+
+    auto_expiry = get_auto_expiry()
+    if auto_expiry:
+        OPTION_EXPIRY = auto_expiry
 
     while True:
         try:
