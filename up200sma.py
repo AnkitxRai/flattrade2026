@@ -56,7 +56,7 @@ def fetch_nt_expiry():
         data = resp.json()
         if not data or not isinstance(data, dict):
             print(f"❌ NT expiry bad response"); return None
-        return data  # ← missing
+        return data
     except Exception as e:
         print(f"❌ NT expiry fetch error: {e}"); return None
 
@@ -102,7 +102,7 @@ def get_auto_expiry():
 
 
 def refresh_config():
-    global SENSIBUL_FUTURE_EXPIRY, OPTION_EXPIRY, QTY, TRADING_ACTIVE
+    global SENSIBUL_FUTURE_EXPIRY, QTY, TRADING_ACTIVE
     json_url = "https://www.jsonkeeper.com/b/EDZIR"
     try:
         resp = requests.get(json_url, timeout=10)
@@ -112,14 +112,13 @@ def refresh_config():
     except Exception as e:
         print(f"❌ Config fetch failed: {e}"); return
     SENSIBUL_FUTURE_EXPIRY = data.get("SENSIBUL_FUTURE_EXPIRY")
-    # OPTION_EXPIRY          = data.get("OPTION_EXPIRY") # Setting auto expiry in main
+    # OPTION_EXPIRY        = data.get("OPTION_EXPIRY") # set once at start
     QTY                    = data.get("QTY")
     TRADING_ACTIVE         = data.get("TRADING_ACTIVE", False)
 
 
 # ─────────────────────────────────────────────
 # FETCH CANDLES — 1 week back → today
-# Returns ts, ltp, signal (1=bull, -1=bear, 0=no cross)
 # ─────────────────────────────────────────────
 def fetch_candles():
     today    = datetime.now().strftime("%Y-%m-%d")
@@ -135,8 +134,9 @@ def fetch_candles():
 
     try:
         resp    = requests.post(url, json=payload, timeout=15)
-        candles = resp.json()["payload"]["candles"]
+        candles = resp.json().get("payload", {}).get("candles", [])
         if not candles:
+            print("⚠️ No candle data received")
             return None, None, None
 
         latest = candles[-1]
@@ -178,17 +178,21 @@ def get_atm_strike(index):
 
 
 def get_adx():
-    today    = datetime.now().strftime("%Y-%m-%d")
-    url      = "https://oxide.sensibull.com/v1/compute/candles/NIFTY"
-    payload  = {
+    today   = datetime.now().strftime("%Y-%m-%d")
+    url     = "https://oxide.sensibull.com/v1/compute/candles/NIFTY"
+    payload = {
         "from_date":    today,
         "to_date":      today,
         "interval":     "1M",
         "skip_last_ts": True,
     }
     try:
-        data  = requests.post(url, json=payload, timeout=15).json()
-        c     = data["payload"]["candles"]
+        data = requests.post(url, json=payload, timeout=15).json()
+        c    = data.get("payload", {}).get("candles", [])
+        if not c:
+            print("⚠️ ADX candle data missing")
+            return None
+
         high  = [x["high"]  for x in c]
         low   = [x["low"]   for x in c]
         close = [x["close"] for x in c]
@@ -224,9 +228,12 @@ def get_day_change():
     url     = "https://webapi.niftytrader.in/webapi/symbol/today-spot-data?symbol=nifty&created_at="
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
     try:
-        data    = requests.get(url, headers=headers).json()
-        index   = data["resultData"]["last_trade_price"]
-        change  = data["resultData"]["change_value"]
+        data    = requests.get(url, headers=headers, timeout=10).json()
+        result  = data.get("resultData", {})
+        index   = result.get("last_trade_price")
+        change  = result.get("change_value")
+        if index is None or change is None:
+            print("⚠️ Spot data missing"); return None
         rounded = round(index / 50) * 50
         return index, change, rounded
     except Exception as e:
@@ -244,20 +251,24 @@ def option_vwap(locked_strike=None):
         return None
 
     try:
-        totals  = option_chain["resultData"]["opTotals"]["total_calls_puts"]
-        coi_pcr = totals["total_puts_change_oi"] - totals["total_calls_change_oi"]
-
+        totals = option_chain.get("resultData", {}).get("opTotals", {}).get("total_calls_puts", {})
+        if not totals:
+            print("⚠️ OI totals missing"); return None
+        coi_pcr     = totals.get("total_puts_change_oi", 0) - totals.get("total_calls_change_oi", 0)
         round_value = locked_strike if locked_strike is not None else (rounded - 50 if coi_pcr > 0 else rounded + 50)
 
-        data_list = option_chain["resultData"]["opDatas"]
-        match     = next((item for item in data_list if item["strike_price"] == round_value), None)
+        data_list = option_chain.get("resultData", {}).get("opDatas", [])
+        if not data_list:
+            print("⚠️ Option chain data missing"); return None
+
+        match = next((item for item in data_list if item["strike_price"] == round_value), None)
         if not match:
             print("⚠️ No matching strike:", round_value); return None
 
         return (
             index, change, round_value, coi_pcr,
-            match.get("calls_ltp"),          match.get("calls_average_price"),
-            match.get("puts_ltp"),           match.get("puts_average_price"),
+            match.get("calls_ltp"),         match.get("calls_average_price"),
+            match.get("puts_ltp"),          match.get("puts_average_price"),
         )
     except Exception as e:
         print("❌ option_vwap error:", e); return None
@@ -279,7 +290,7 @@ def send_telegram_message(msg, imp=True):
 
 def format_output(ts, ltp, coi_pcr, change_pts, ma_data, adx):
     time_str     = datetime.fromisoformat(ts).strftime("%H:%M")
-    adx_str = f"ADX:{adx}" if adx else "ADX:--"
+    adx_str      = f"ADX:{adx}" if adx else "ADX:--"
     coi_flag     = "🟢" if coi_pcr > 0 else "🔴"
     coi_pcr_k    = round(coi_pcr / 1000, 1)
     change_emoji = "🟢" if change_pts >= 0 else "🔴"
@@ -293,6 +304,7 @@ def format_output(ts, ltp, coi_pcr, change_pts, ma_data, adx):
 
     print(f"🕒 {time_str} | {ltp} | {change_pts} {change_emoji} | MA:{cross_str} | {adx_str} | {coi_pcr_k}K{coi_flag} | {ma_str}")
     send_telegram_message(f"🕒{time_str} | {change_pts} {change_emoji} | MA:{cross_str} | {adx_str} | {coi_pcr_k}K{coi_flag}", False)
+
 
 def calculate_realized_pnl():
     position_book = api.get_positions() or []
@@ -442,7 +454,7 @@ def monitor_loop():
         return
 
     # ── Entry / Exit conditions ──
-    # MA cross + option VWAP only
+    # MA side + option VWAP only
     call_entry = ma_data["bull_side"] and cltp > cvwap
     put_entry  = ma_data["bear_side"] and pltp > pvwap
 
@@ -489,8 +501,9 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"❌ Monitor error: {e}")
 
-            now = datetime.now()
-            time.sleep(60 - now.second + 5)
+            now        = datetime.now()
+            sleep_time = max(5, 65 - now.second)
+            time.sleep(sleep_time)
 
         except KeyboardInterrupt:
             print("🛑 Stopped by user.")
