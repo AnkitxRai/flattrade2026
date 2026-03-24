@@ -49,7 +49,7 @@ def fetch_nt_total():
 # ─────────────────────────────────────────────
 def fetch_nt_expiry():
     created_time = (datetime.now() - timedelta(minutes=2)).strftime("%H:%M:%S")
-    url     = f"https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime={created_time}&isloader=false&atmBelow=2&atmAbove=2"
+    url     = f"https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime={created_time}&isloader=false&atmBelow=5&atmAbove=5"
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -124,7 +124,7 @@ def fetch_candles():
     today    = datetime.now().strftime("%Y-%m-%d")
     week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    url     = "https://oxide.sensibull.com/v1/compute/candles/NIFTY"
+    url     = "https://oxide.sensibull.com/v1/compute/2/candles/NIFTY"
     payload = {
         "from_date":    week_ago,
         "to_date":      today,
@@ -179,7 +179,7 @@ def get_atm_strike(index):
 
 def get_adx():
     today   = datetime.now().strftime("%Y-%m-%d")
-    url     = "https://oxide.sensibull.com/v1/compute/candles/NIFTY"
+    url     = "https://oxide.sensibull.com/v1/compute/2/candles/NIFTY"
     payload = {
         "from_date":    today,
         "to_date":      today,
