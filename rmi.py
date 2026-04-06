@@ -43,7 +43,7 @@ rmi_negative = False
 # Fetch Strike OI and VWAP Data
 # ─────────────────────────────────────────────
 def fetch_nt_total():
-    url     = "https://webapi.niftytrader.in/webapi/option/option-chain-data?symbol=nifty&exchange=nse&expiryDate=&atmBelow=2&atmAbove=2"
+    url     = "https://webapi.niftytrader.in/webapi/option/option-chain-data?symbol=nifty&exchange=nse&expiryDate=&atmBelow=5&atmAbove=5"
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
