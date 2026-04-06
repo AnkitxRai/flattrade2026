@@ -18,6 +18,11 @@ password     = "##"
 totp_secret  = "35LY6332V5YJ36F5RATW36GJ7J446L43"
 app_key      = "9e5e9c7220b524ea19a7e6029f5140c423daea49318b23b3b36416549673bac2"
 
+# userid = "FZ31096"
+# password = "##"
+# totp_secret = "V3B3T3AZ3U6236HO35BQRL6S4KP725O5"
+# app_key = "271b7fc4385a31a3855553a29e31af8a1ee91232f3f980aa810197afe58c8ff9"
+
 ############################## config ###########################
 
 SENSIBUL_FUTURE_EXPIRY = None
