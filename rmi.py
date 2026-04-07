@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 NIFTY Options Bot — RMI Trend Sniper
-Entry : positive flips True + RWMA blue → CALL
-        negative flips True + RWMA red  → PUT
+Entry : positive flips True → CALL
+        negative flips True → PUT
 Exit  : opposite signal OR 15:12
 """
 
@@ -140,7 +140,6 @@ def fetch_candles_rmi():
     week_ago = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
 
     url     = f"https://oxide.sensibull.com/v1/compute/2/candles/{SENSIBUL_FUTURE_EXPIRY or 'NIFTY26APRFUT'}"
-    print(url)
     payload = {
         "from_date":    week_ago,
         "to_date":      today,
@@ -159,11 +158,11 @@ def fetch_candles_rmi():
             print(f"⚠️ Not enough candles: {len(candles)}")
             return None, None, None
 
-        hi  = [c["high"]   for c in candles]
-        lo  = [c["low"]    for c in candles]
-        cl  = [c["close"]  for c in candles]
-        vol = [c["volume"] for c in candles]
-        ts_list = [c["ts"] for c in candles]
+        hi      = [c["high"]   for c in candles]
+        lo      = [c["low"]    for c in candles]
+        cl      = [c["close"]  for c in candles]
+        vol     = [c["volume"] for c in candles]
+        ts_list = [c["ts"]     for c in candles]
 
         # ── RMA ──
         def rma(series, length):
@@ -175,12 +174,12 @@ def fetch_candles_rmi():
             return out
 
         # ── RSI ──
-        change  = [0.0] + [cl[i] - cl[i-1] for i in range(1, len(cl))]
-        up_s    = rma([max(x, 0) for x in change], RMI_LEN)
-        down_s  = rma([max(-x, 0) for x in change], RMI_LEN)
-        rsi     = []
+        change = [0.0] + [cl[i] - cl[i-1] for i in range(1, len(cl))]
+        up_s   = rma([max(x, 0) for x in change], RMI_LEN)
+        down_s = rma([max(-x, 0) for x in change], RMI_LEN)
+        rsi    = []
         for u, d in zip(up_s, down_s):
-            if float('nan') in [u, d] or (u != u) or (d != d):
+            if (u != u) or (d != d):
                 rsi.append(float('nan'))
             elif d == 0:
                 rsi.append(100.0)
@@ -205,7 +204,7 @@ def fetch_candles_rmi():
         neg_sum = rolling_sum(neg_mf, RMI_LEN)
         mfi     = []
         for p, n in zip(pos_sum, neg_sum):
-            if p != p or n != n:
+            if (p != p) or (n != n):
                 mfi.append(float('nan'))
             elif n == 0:
                 mfi.append(100.0)
@@ -214,7 +213,7 @@ def fetch_candles_rmi():
             else:
                 mfi.append(100 - (100 / (1 + p / n)))
 
-        # ── rsi_mfi ──
+        # ── rsi_mfi = avg(rsi, mfi) ──
         rsi_mfi = [(rsi[i] + mfi[i]) / 2 if (rsi[i] == rsi[i] and mfi[i] == mfi[i])
                    else float('nan') for i in range(len(cl))]
 
@@ -225,7 +224,7 @@ def fetch_candles_rmi():
             if i == 0:
                 ema5[i] = cl[i]
             else:
-                prev = ema5[i-1] if ema5[i-1] == ema5[i-1] else cl[i]
+                prev    = ema5[i-1] if ema5[i-1] == ema5[i-1] else cl[i]
                 ema5[i] = cl[i] * k + prev * (1 - k)
         ema5_change = [0.0] + [ema5[i] - ema5[i-1] for i in range(1, len(ema5))]
 
@@ -237,24 +236,18 @@ def fetch_candles_rmi():
                 p_mom.append(False); n_mom.append(False); continue
             rm_prev = rsi_mfi[i-1]
             rm_curr = rsi_mfi[i]
-            if rm_prev != rm_prev or rm_curr != rm_curr:
+            if (rm_prev != rm_prev) or (rm_curr != rm_curr):
                 p_mom.append(False); n_mom.append(False); continue
             p_mom.append(rm_prev < PMOM and rm_curr > PMOM and rm_curr > NMOM and ema5_change[i] > 0)
             n_mom.append(rm_curr < NMOM and ema5_change[i] < 0)
 
-        # ── Stateful positive/negative — reset at each new day ──
+        # ── Stateful positive/negative — NO day reset, carry state like Pine var bool ──
         positive = []
         negative = []
         pos = False
         neg = False
-        prev_date = None
 
         for i in range(len(cl)):
-            cur_date = datetime.fromisoformat(ts_list[i]).date()
-            if prev_date is not None and cur_date != prev_date:
-                pos = False
-                neg = False
-            prev_date = cur_date
             if p_mom[i]:
                 pos = True;  neg = False
             if n_mom[i]:
@@ -262,21 +255,41 @@ def fetch_candles_rmi():
             positive.append(pos)
             negative.append(neg)
 
+        # ── Filter to today's candles only for signal detection ──
+        today_date = datetime.now().date()
+        today_indices = [i for i, ts in enumerate(ts_list)
+                         if datetime.fromisoformat(ts).date() == today_date]
+
+        if len(today_indices) < 2:
+            # not enough today candles yet — still return state
+            pos_now  = positive[-1]
+            neg_now  = negative[-1]
+            rmi_positive = pos_now
+            rmi_negative = neg_now
+            return ts_list[-1], cl[-1], {
+                "buy_signal"  : False,
+                "sell_signal" : False,
+                "positive"    : pos_now,
+                "negative"    : neg_now,
+                "rsi_mfi"     : round(rsi_mfi[-1], 2) if rsi_mfi[-1] == rsi_mfi[-1] else None,
+            }
+
         # ── Current and previous bar ──
         pos_now  = positive[-1]
         neg_now  = negative[-1]
         pos_prev = positive[-2]
         neg_prev = negative[-2]
 
-        buy_signal  = pos_now and not pos_prev
-        sell_signal = neg_now and not neg_prev
+        # Signal only fires on today's candles
+        last_idx      = today_indices[-1]
+        prev_idx      = today_indices[-2] if len(today_indices) >= 2 else last_idx
+
+        buy_signal  = positive[last_idx] and not positive[prev_idx]
+        sell_signal = negative[last_idx] and not negative[prev_idx]
 
         # ── Update global state ──
         rmi_positive = pos_now
         rmi_negative = neg_now
-
-        latest_ts  = ts_list[-1]
-        latest_ltp = cl[-1]
 
         rmi_data = {
             "buy_signal"  : buy_signal,
@@ -286,7 +299,7 @@ def fetch_candles_rmi():
             "rsi_mfi"     : round(rsi_mfi[-1], 2) if rsi_mfi[-1] == rsi_mfi[-1] else None,
         }
 
-        return latest_ts, latest_ltp, rmi_data
+        return ts_list[-1], cl[-1], rmi_data
 
     except Exception as e:
         print(f"❌ fetch_candles_rmi error: {e}")
@@ -525,8 +538,6 @@ def monitor_loop():
     positive    = rmi_data["positive"]
     negative    = rmi_data["negative"]
 
-    # ── CALL logic ──
-    # Entry: RMI buy signal + RWMA blue (positive)
     # ── CALL logic ──
     if ACTIVE_POSITION == "CALL":
         if negative:
