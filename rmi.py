@@ -439,7 +439,10 @@ def place_atm_order(expiry, callOrPut="C", qty=65, atm=None):
         tradingsymbol=option_strike, quantity=qty,
         price_type="MKT", price=0.0
     )
-    if resp and resp.get("stat") == "Ok":
+    if resp is None:
+        print(f"❌ Order failed: {option_strike} | No response from API")
+        return None
+    if resp.get("stat") == "Ok":
         print(f"✅ Order placed: {option_strike} | {resp.get('norenordno')}")
     else:
         print(f"❌ Order failed: {option_strike} | {resp.get('emsg', 'Unknown')}")
