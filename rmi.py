@@ -29,7 +29,7 @@ SENSIBUL_FUTURE_EXPIRY = None
 OPTION_EXPIRY          = None
 QTY                    = None
 TRADING_ACTIVE         = False
-FIRST_TRADE            = True
+FIRST_TRADE            = False
 ACTIVE_POSITION        = None
 ENTRY_STRIKE           = None
 TELEGRAM               = True
@@ -241,12 +241,11 @@ def fetch_candles_rmi():
             p_mom.append(rm_prev < PMOM and rm_curr > PMOM and rm_curr > NMOM and ema5_change[i] > 0)
             n_mom.append(rm_curr < NMOM and ema5_change[i] < 0)
 
-        # ── Stateful positive/negative — NO day reset, carry state like Pine var bool ──
+        # ── Stateful positive/negative — no day reset, carry like Pine var bool ──
         positive = []
         negative = []
         pos = False
         neg = False
-
         for i in range(len(cl)):
             if p_mom[i]:
                 pos = True;  neg = False
@@ -255,51 +254,34 @@ def fetch_candles_rmi():
             positive.append(pos)
             negative.append(neg)
 
-        # ── Filter to today's candles only for signal detection ──
-        today_date = datetime.now().date()
+        # ── Ensure today has at least 1 candle ──
+        today_date    = datetime.now().date()
         today_indices = [i for i, ts in enumerate(ts_list)
                          if datetime.fromisoformat(ts).date() == today_date]
 
-        if len(today_indices) < 2:
-            # not enough today candles yet — still return state
-            pos_now  = positive[-1]
-            neg_now  = negative[-1]
-            rmi_positive = pos_now
-            rmi_negative = neg_now
-            return ts_list[-1], cl[-1], {
-                "buy_signal"  : False,
-                "sell_signal" : False,
-                "positive"    : pos_now,
-                "negative"    : neg_now,
-                "rsi_mfi"     : round(rsi_mfi[-1], 2) if rsi_mfi[-1] == rsi_mfi[-1] else None,
-            }
+        if not today_indices:
+            print("⚠️ No today candles found")
+            return None, None, None
 
-        # ── Current and previous bar ──
-        pos_now  = positive[-1]
-        neg_now  = negative[-1]
-        pos_prev = positive[-2]
-        neg_prev = negative[-2]
+        # ── Signal: last candle vs previous candle ──
+        last_idx    = len(positive) - 1
+        prev_idx    = last_idx - 1
 
-        # Signal only fires on today's candles
-        last_idx      = today_indices[-1]
-        prev_idx      = today_indices[-2] if len(today_indices) >= 2 else last_idx
-
+        pos_now     = positive[last_idx]
+        neg_now     = negative[last_idx]
         buy_signal  = positive[last_idx] and not positive[prev_idx]
         sell_signal = negative[last_idx] and not negative[prev_idx]
 
-        # ── Update global state ──
         rmi_positive = pos_now
         rmi_negative = neg_now
 
-        rmi_data = {
+        return ts_list[-1], cl[-1], {
             "buy_signal"  : buy_signal,
             "sell_signal" : sell_signal,
             "positive"    : pos_now,
             "negative"    : neg_now,
             "rsi_mfi"     : round(rsi_mfi[-1], 2) if rsi_mfi[-1] == rsi_mfi[-1] else None,
         }
-
-        return ts_list[-1], cl[-1], rmi_data
 
     except Exception as e:
         print(f"❌ fetch_candles_rmi error: {e}")
@@ -510,13 +492,11 @@ def monitor_loop():
     if auto_close_eod():
         return
 
-    # ── Fetch candles + compute RMI ──
     ts, ltp, rmi_data = fetch_candles_rmi()
     if ts is None or ltp is None or rmi_data is None:
         print(f"{datetime.now().strftime('%H:%M')} | Candle/RMI fetch error, skipping…")
         return
 
-    # ── Fetch option vwap ──
     result = option_vwap(locked_strike=ENTRY_STRIKE)
     if result is None:
         print(f"{datetime.now().strftime('%H:%M')} | option_vwap error, skipping…")
@@ -527,7 +507,6 @@ def monitor_loop():
 
     format_output(ts, ltp, coi_pcr, change, rmi_data)
 
-    # ── Skip first candle ──
     if FIRST_TRADE and ACTIVE_POSITION is None:
         FIRST_TRADE = False
         print("ℹ️ First candle — skipping trade.")
@@ -544,7 +523,7 @@ def monitor_loop():
             print("🔄 RMI flipped negative — closing CALL")
             close_trade()
     elif ACTIVE_POSITION is None:
-        if buy_signal:
+        if buy_signal or positive:
             execute_call_trade(atm)
 
     # ── PUT logic ──
@@ -553,7 +532,7 @@ def monitor_loop():
             print("🔄 RMI flipped positive — closing PUT")
             close_trade()
     elif ACTIVE_POSITION is None:
-        if sell_signal:
+        if sell_signal or negative:
             execute_put_trade(atm)
 
 
