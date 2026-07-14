@@ -26,6 +26,7 @@ app_key      = "9e5e9c7220b524ea19a7e6029f5140c423daea49318b23b3b36416549673bac2
 ############################## config ###########################
 
 SENSIBUL_FUTURE_EXPIRY = None
+_SENSIBULL_TOKEN       = None
 OPTION_EXPIRY          = None
 QTY                    = None
 TRADING_ACTIVE         = False
@@ -133,8 +134,39 @@ def refresh_config():
 # ─────────────────────────────────────────────
 # FETCH CANDLES + COMPUTE RMI TREND SNIPER
 # ─────────────────────────────────────────────
+
+# Sensibull access token management
+def get_fresh_access_token():
+    session = requests.Session()
+    resp = session.get(
+        "https://oxide.sensibull.com/v1/pluto/auth/web/session/a/platform/identify",
+        headers={
+            "accept": "application/json, text/plain, */*",
+            "origin": "https://web.sensibull.com",
+            "referer": "https://web.sensibull.com/",
+            "user-agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/146.0.0.0 Safari/537.36"
+            ),
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+    token = session.cookies.get("access_token")
+    if not token:
+        for c in session.cookies:
+            if c.name == "access_token":
+                token = c.value
+                break
+    if not token:
+        raise RuntimeError(f"access_token cookie not found. Cookies received: {session.cookies.get_dict()}")
+    return token
+
+
 def fetch_candles_rmi():
-    global rmi_positive, rmi_negative
+    global rmi_positive, rmi_negative, _SENSIBULL_TOKEN
 
     today    = datetime.now().strftime("%Y-%m-%d")
     week_ago = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
@@ -147,8 +179,35 @@ def fetch_candles_rmi():
         "skip_last_ts": True,
     }
 
+    base_headers = {
+        "accept": "application/json, text/plain, */*",
+        "content-type": "application/json",
+        "origin": "https://web.sensibull.com",
+        "referer": "https://web.sensibull.com/",
+        "user-agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/146.0.0.0 Safari/537.36"
+        ),
+    }
+
     try:
-        resp    = requests.post(url, json=payload, timeout=15)
+        if not _SENSIBULL_TOKEN:
+            _SENSIBULL_TOKEN = get_fresh_access_token()
+
+        headers = dict(base_headers, cookie=f"access_token={_SENSIBULL_TOKEN}")
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+
+        if resp.status_code == 401:
+            print("⚠️ access_token expired, refreshing…")
+            _SENSIBULL_TOKEN = get_fresh_access_token()
+            headers = dict(base_headers, cookie=f"access_token={_SENSIBULL_TOKEN}")
+            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+
+        if resp.status_code != 200:
+            print(f"⚠️ Sensibull error: {resp.status_code} — {resp.text[:200]}")
+            return None, None, None
+
         candles = resp.json().get("payload", {}).get("candles", [])
         if not candles:
             print("⚠️ No candle data received")
