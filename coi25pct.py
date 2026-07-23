@@ -193,7 +193,7 @@ def fetch_candles_rmi():
     payload = {
         "from_date":    week_ago,
         "to_date":      today,
-        "interval":     "5M",
+        "interval":     "1M",
         "skip_last_ts": True,
     }
 
