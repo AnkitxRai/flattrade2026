@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """
-NIFTY Options Bot — RMI Trend Sniper
-Entry : positive flips True → CALL
-        negative flips True → PUT
-Exit  : opposite signal OR 15:12
+NIFTY Options Bot
+Display : RMI Trend Sniper value (informational only — shown in console/Telegram)
+Trading : 25% COI Trailing Flip (this is the ONLY thing that opens/closes positions)
+
+RMI is fetched and shown exactly like before so you can eyeball it, but it does
+NOT influence buy_signal/sell_signal/execute_* calls anymore. All entries/exits
+come from calculate_coi_signal() below.
+
+COI Strategy
+  coi = total_puts_change_oi - total_calls_change_oi
+  First candle : side = CALL if coi >= 0 else PUT ; x = coi ; y = abs(x) * 0.25
+  CALL side    : coi > x        -> hold, x = coi, y = abs(x)*0.25
+                 coi < x - y     -> flip to PUT, x = coi, y = abs(x)*0.25
+                 else            -> hold
+  PUT side     : coi < x        -> hold, x = coi, y = abs(x)*0.25
+                 coi > x + y     -> flip to CALL, x = coi, y = abs(x)*0.25
+                 else            -> hold
+Exit : opposite flip OR 15:12
 """
 
 import requests
@@ -44,6 +58,10 @@ EMA_LEN  = 5
 # ─── STATE ───
 rmi_positive = False
 rmi_negative = False
+
+# ─── 25% COI TRAILING-FLIP STATE (this drives all trading) ───
+# Holds {"side": "CALL"/"PUT", "x": trailing extreme coi, "y": abs(x)*0.25}
+STRATEGY_STATE = None
 
 # ─────────────────────────────────────────────
 # Fetch Strike OI and VWAP Data
@@ -348,6 +366,65 @@ def fetch_candles_rmi():
         return None, None, None
 
 
+# ─────────────────────────────────────────────
+# 25% COI TRAILING-FLIP STRATEGY (this is what trades)
+# ─────────────────────────────────────────────
+
+def get_threshold(x):
+    return abs(x) * 0.25
+
+
+def calculate_coi_signal(minute):
+    """
+    minute = {"time": ..., "nifty": ..., "coi": ...}
+    Stateful — mutates/creates STRATEGY_STATE.
+    Returns {"side", "x", "y", "action", "signal"} where signal is
+    "CALL"/"PUT" only on the candle that (re)enters that side, else None.
+    """
+    global STRATEGY_STATE
+
+    coi = minute["coi"]
+
+    if STRATEGY_STATE is None:
+        side = "CALL" if coi >= 0 else "PUT"
+        x = coi
+        y = get_threshold(x)
+        STRATEGY_STATE = {"side": side, "x": x, "y": y}
+        return {"side": side, "x": x, "y": y, "action": f"enter {side.lower()}", "signal": side}
+
+    state  = STRATEGY_STATE
+    signal = None
+
+    if state["side"] == "CALL":
+        if coi > state["x"]:
+            state["x"] = coi
+            state["y"] = get_threshold(state["x"])
+            action = "hold call"
+        elif coi < state["x"] - state["y"]:
+            state["side"] = "PUT"
+            state["x"]    = coi
+            state["y"]    = get_threshold(state["x"])
+            action = "exit call / enter put"
+            signal = "PUT"
+        else:
+            action = "hold call"
+    else:
+        if coi < state["x"]:
+            state["x"] = coi
+            state["y"] = get_threshold(state["x"])
+            action = "hold put"
+        elif coi > state["x"] + state["y"]:
+            state["side"] = "CALL"
+            state["x"]    = coi
+            state["y"]    = get_threshold(state["x"])
+            action = "exit put / enter call"
+            signal = "CALL"
+        else:
+            action = "hold put"
+
+    return {"side": state["side"], "x": state["x"], "y": state["y"], "action": action, "signal": signal}
+
+
 def get_atm_strike(index):
     return round(index / 50) * 50
 
@@ -511,7 +588,9 @@ def place_atm_order(expiry, callOrPut="C", qty=65, atm=None):
 def execute_call_trade(atm):
     global ACTIVE_POSITION, ENTRY_STRIKE
     if not before_execution(): return
-    place_atm_order(OPTION_EXPIRY, "C", QTY, atm)
+    resp = place_atm_order(OPTION_EXPIRY, "C", QTY, atm)
+    if resp is None or resp.get("stat") != "Ok":
+        return
     ACTIVE_POSITION = "CALL"
     ENTRY_STRIKE    = atm
     send_telegram_message(f"🟢 Entered Call | Strike {atm}")
@@ -521,7 +600,9 @@ def execute_call_trade(atm):
 def execute_put_trade(atm):
     global ACTIVE_POSITION, ENTRY_STRIKE
     if not before_execution(): return
-    place_atm_order(OPTION_EXPIRY, "P", QTY, atm)
+    resp = place_atm_order(OPTION_EXPIRY, "P", QTY, atm)
+    if resp is None or resp.get("stat") != "Ok":
+        return
     ACTIVE_POSITION = "PUT"
     ENTRY_STRIKE    = atm
     send_telegram_message(f"🔴 Entered Put | Strike {atm}")
@@ -569,32 +650,30 @@ def monitor_loop():
 
     format_output(ts, ltp, coi_pcr, change, rmi_data)
 
-    if FIRST_TRADE and ACTIVE_POSITION is None:
-        FIRST_TRADE = False
-        print("ℹ️ First candle — skipping trade.")
-        return
+    # ── 25% COI trailing-flip strategy — this is the ONLY thing that trades ──
+    minute = {"time": ts, "nifty": index, "coi": coi_pcr}
+    strat  = calculate_coi_signal(minute)
+    signal = strat["signal"]
 
-    buy_signal  = rmi_data["buy_signal"]
-    sell_signal = rmi_data["sell_signal"]
-    positive    = rmi_data["positive"]
-    negative    = rmi_data["negative"]
+    if signal:
+        print(f"🎯 COI signal: {signal} | x={round(strat['x'])} y={round(strat['y'])} | {strat['action']}")
 
-    # ── CALL logic ──
     if ACTIVE_POSITION == "CALL":
-        if negative:
-            print("🔄 RMI flipped negative — closing CALL")
+        if signal == "PUT":
+            print("🔄 COI flipped below trigger — closing CALL, entering PUT")
             close_trade()
-    elif ACTIVE_POSITION is None:
-        if buy_signal or positive:
+            execute_put_trade(atm)
+    elif ACTIVE_POSITION == "PUT":
+        if signal == "CALL":
+            print("🔄 COI flipped above trigger — closing PUT, entering CALL")
+            close_trade()
             execute_call_trade(atm)
-
-    # ── PUT logic ──
-    if ACTIVE_POSITION == "PUT":
-        if positive:
-            print("🔄 RMI flipped positive — closing PUT")
-            close_trade()
     elif ACTIVE_POSITION is None:
-        if sell_signal or negative:
+        # No open position yet — take the side the COI strategy currently favors
+        # (fires on the very first minute, or after a manual/EOD flat).
+        if strat["side"] == "CALL":
+            execute_call_trade(atm)
+        else:
             execute_put_trade(atm)
 
 
