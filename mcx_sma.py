@@ -11,6 +11,7 @@ Strategy:
 """
 
 import time
+import requests
 from datetime import datetime, timedelta
 from NorenWebApi import NorenWebApi, ProductType, PriceType, BuyorSell
 
@@ -43,9 +44,27 @@ CHECK_INTERVAL_SEC = 300
 FAST_SMA = 5
 SLOW_SMA = 200
 
+TELEGRAM = True
+
 strategy_side = None
 
 api = NorenWebApi()
+
+
+def send_telegram_message(msg, imp=True):
+    if not TELEGRAM:
+        return
+
+    BOT_TOKEN = "8331147432:AAGSG4mI8d87sWEBsY0qtarAtwWbpa4viq0"
+    CHANNEL_ID = "-1003494200670"
+    CHANNEL_ID_IMP = "-1003448158591"
+    chat_id = CHANNEL_ID_IMP if imp else CHANNEL_ID
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    try:
+        requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=15)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
 def login():
@@ -174,10 +193,14 @@ def close_position():
     )
 
     if resp is None or resp.get("stat") != "Ok":
-        print(f"Failed to close {side}: {resp}")
+        msg = f"MCX SMA: Failed to close {side} {abs(netqty)} {TRADINGSYMBOL}: {resp}"
+        print(msg)
+        send_telegram_message(msg, imp=True)
         return False
 
-    print(f"Closed {side} position ({abs(netqty)} qty) | order={resp.get('norenordno')}")
+    msg = f"MCX SMA: Closed {side} {abs(netqty)} {TRADINGSYMBOL} | order={resp.get('norenordno')}"
+    print(msg)
+    send_telegram_message(msg, imp=True)
     return True
 
 
@@ -194,10 +217,14 @@ def enter_long(qty=QTY):
     )
 
     if resp is None or resp.get("stat") != "Ok":
-        print(f"Failed to enter LONG: {resp}")
+        msg = f"MCX SMA: Failed to enter LONG {qty} {TRADINGSYMBOL}: {resp}"
+        print(msg)
+        send_telegram_message(msg, imp=True)
         return None
 
-    print(f"Entered LONG {qty} | order={resp.get('norenordno')}")
+    msg = f"MCX SMA: Entered LONG {qty} {TRADINGSYMBOL} | order={resp.get('norenordno')}"
+    print(msg)
+    send_telegram_message(msg, imp=True)
     return resp
 
 
@@ -214,10 +241,14 @@ def enter_short(qty=QTY):
     )
 
     if resp is None or resp.get("stat") != "Ok":
-        print(f"Failed to enter SHORT: {resp}")
+        msg = f"MCX SMA: Failed to enter SHORT {qty} {TRADINGSYMBOL}: {resp}"
+        print(msg)
+        send_telegram_message(msg, imp=True)
         return None
 
-    print(f"Entered SHORT {qty} | order={resp.get('norenordno')}")
+    msg = f"MCX SMA: Entered SHORT {qty} {TRADINGSYMBOL} | order={resp.get('norenordno')}"
+    print(msg)
+    send_telegram_message(msg, imp=True)
     return resp
 
 
