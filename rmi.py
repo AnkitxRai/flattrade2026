@@ -48,11 +48,35 @@ rmi_negative = False
 # ─────────────────────────────────────────────
 # Fetch Strike OI and VWAP Data
 # ─────────────────────────────────────────────
+NT_SSR_SECRET = "c3a5b7d9e1f02a4c6b8d0f1e3a5c7d9b2e4a6f8c0b1d3e5a7f9c2b4d6e8a0f1c3b5d7e9a1f2b4c6d8e0f1a3b5c7d9e2f4a6b8c0d1e3f5a7b9c2d4e6f8a0b"
+
+
+def fetch_nt_api_key():
+    resp = requests.get(
+        "https://onboarding.niftytrader.in/api/api-key",
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "accept": "application/json",
+            "X-SSR-Secret": NT_SSR_SECRET,
+        },
+        timeout=20,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    result = data.get("resultData") if isinstance(data, dict) else None
+    key = result.get("apiKey") if isinstance(result, dict) else None
+    if not isinstance(key, str) or not key:
+        raise ValueError("NT API-key response did not contain an apiKey")
+    return key
+
+
 def fetch_nt_total():
     url     = "https://webapi.niftytrader.in/webapi/option/option-chain-data?symbol=nifty&exchange=nse&expiryDate=&atmBelow=5&atmAbove=5"
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
     try:
+        headers["x-api-key"] = fetch_nt_api_key()
         resp = requests.get(url, headers=headers, timeout=20)
+        resp.raise_for_status()
         data = resp.json()
         if not data or not isinstance(data, dict):
             print(f"❌ NT bad response"); return None
@@ -68,7 +92,9 @@ def fetch_nt_expiry():
     url     = f"https://webapi.niftytrader.in/webapi/Option/option-chain-calculator-data?symbol=nifty&expiryDate=&createdTime={created_time}&isloader=false&atmBelow=5&atmAbove=5"
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
     try:
+        headers["x-api-key"] = fetch_nt_api_key()
         resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
         data = resp.json()
         if not data or not isinstance(data, dict):
             print(f"❌ NT expiry bad response"); return None
