@@ -382,6 +382,7 @@ def get_day_change():
     url     = "https://webapi.niftytrader.in/webapi/symbol/today-spot-data?symbol=nifty&created_at="
     headers = {"User-Agent": "Mozilla/5.0", "accept": "application/json"}
     try:
+        headers["x-api-key"] = fetch_nt_api_key()
         data    = requests.get(url, headers=headers, timeout=10).json()
         result  = data.get("resultData", {})
         index   = result.get("last_trade_price")
